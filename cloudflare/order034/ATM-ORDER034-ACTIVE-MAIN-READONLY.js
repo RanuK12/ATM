@@ -148,7 +148,7 @@ var HARD_MODEL_CALL_CAP = 240;
 var INPUT_NEURONS_PER_TOKEN = 5500 / 1e6;
 var OUTPUT_NEURONS_PER_TOKEN = 36400 / 1e6;
 var EXECUTION_LADDER = ["DISCOVERED", "EVALUATING", "AUTO_ELIGIBLE", "HUMAN_ASSISTABLE", "ACQUIRING", "EXECUTING", "VERIFYING", "SUBMITTED", "ACCEPTED", "PAID"];
-var MONEY_LOOP_VERSION = "ORDER-033/AUD-020";
+var MONEY_LOOP_VERSION = "ORDER-034/AUD-021";
 var DAYDREAMS_API = "https://api.taskmarket.dev/api";
 var AGENTHANSA_API = "https://www.agenthansa.com/api";
 var BROWSER_FREE_DAILY_BUDGET_MINUTES = 10;
@@ -2030,7 +2030,7 @@ var ATMBrain = class extends DurableObject {
           state: "HUMAN_EXTERNAL_WORK_ONLY",
           proposed_action: { stage: "PROPOSED_ACTION", action: "HUMAN_EXTERNAL_WORK_NOT_ATM_GATE", action_url: opp.source_url || null, potential_not_earned_usd: amountUsd(opp), earnings_class: "POTENTIAL_NOT_EARNED" },
           policy_boundary: { stage: "POLICY_BOUNDARY", automatic_mutation_allowed: false, owner_action_required: false, human_external_work_required: true, owner_consent_required_to_resume_atm: false, approval_control_eligible: false, runtime_resumes_after_owner_action: false, owner_click_is_completion: false, external_readback_required: true, readback_adapter_supports_completion: false, exact_resume_adapter: null, execution_job_id: null, control_state: "NOT_REQUESTED", blocked_automation: h.signals, hard_blockers: h.hard, owner_only: h.owner_only },
-          human_gate: { stage: "HUMAN_GATE", status: "INFORMATION_ONLY_NO_ATM_RESUME" },
+          human_gate: { stage: "HUMAN_GATE", status: "OPERATIONAL" },
           owner_approval: { status: "NOT_APPLICABLE", approved_at: null },
           canonical_dispatch: null,
           external_readback: null,
@@ -2044,7 +2044,7 @@ var ATMBrain = class extends DurableObject {
         p.source = opp.source;
         p.proposed_action = { stage: "PROPOSED_ACTION", action: "HUMAN_EXTERNAL_WORK_NOT_ATM_GATE", action_url: opp.source_url || null, potential_not_earned_usd: amountUsd(opp), earnings_class: "POTENTIAL_NOT_EARNED" };
         p.policy_boundary = { stage: "POLICY_BOUNDARY", automatic_mutation_allowed: false, owner_action_required: false, human_external_work_required: true, owner_consent_required_to_resume_atm: false, approval_control_eligible: false, runtime_resumes_after_owner_action: false, owner_click_is_completion: false, external_readback_required: true, readback_adapter_supports_completion: false, exact_resume_adapter: null, execution_job_id: null, control_state: "NOT_REQUESTED", blocked_automation: h.signals, hard_blockers: h.hard, owner_only: h.owner_only };
-        p.human_gate = { stage: "HUMAN_GATE", status: "INFORMATION_ONLY_NO_ATM_RESUME" };
+        p.human_gate = { stage: "HUMAN_GATE", status: "OPERATIONAL", opportunity_id: selected.opportunity_id };
         if (p.owner_approval?.status === "APPROVED") p.owner_approval = { ...p.owner_approval, status: "HISTORICAL_APPROVAL_NO_EFFECT" };
         else if (p.owner_approval?.status !== "HISTORICAL_APPROVAL_NO_EFFECT") p.owner_approval = { status: "NOT_APPLICABLE", approved_at: null };
         p.state = "HUMAN_EXTERNAL_WORK_ONLY";
@@ -2081,6 +2081,12 @@ var ATMBrain = class extends DurableObject {
     const latest = /* @__PURE__ */ new Map();
     for (const e of ledger) latest.set(e.opportunity_id, e);
     const vals = [...latest.values()];
+    
+    // Money Velocity Engine - Deterministic metrics
+    const MONTHLY_TARGET_USD = 5000; // Configurable monthly revenue target
+    const MONTHLY_REALIZED_WITHDRAWABLE_USD = sum(vals.filter((x) => x.stage === "WITHDRAWABLE" || x.stage === "WITHDRAWN"));
+    const MONEY_VELOCITY = MONTHLY_TARGET_USD > 0 ? MONTHLY_REALIZED_WITHDRAWABLE_USD / MONTHLY_TARGET_USD : 0;
+    
     return {
       currency: "USD_EQUIVALENT",
       today: sum(paid.filter((x) => Date.parse(x.at) >= cutoff(1))),
@@ -2095,7 +2101,12 @@ var ATMBrain = class extends DurableObject {
       realized_rule: "ONLY_EXTERNAL_PAID_RECEIPTS_COUNT_AS_EARNINGS",
       blocked_bounties_counted: false,
       ledger_events: ledger.length,
-      last_event: ledger.at(-1)?.at || null
+      last_event: ledger.at(-1)?.at || null,
+      // Money Velocity Engine metrics
+      monthly_target_usd: MONTHLY_TARGET_USD,
+      monthly_realized_withdrawable_usd: MONTHLY_REALIZED_WITHDRAWABLE_USD,
+      money_velocity: Math.round(MONEY_VELOCITY * 100) / 100,
+      velocity_status: MONEY_VELOCITY >= 1.0 ? "ON_TARGET" : MONEY_VELOCITY >= 0.5 ? "ACCELERATING" : "BUILDING"
     };
   }
   async queueState(opps = null) {
@@ -3169,7 +3180,7 @@ async function load(){
  const stageRank={EXECUTING:0,VERIFYING:0,SUBMITTED:1,WAITING_ACCEPTANCE:1,ACCEPTED:2,PAID:3};const uiRank=x=>stageRank[x.execution_stage]??(x.ai_executability==="AI_EXECUTABLE"?4:9);const rows=[...(o.results||[])].sort((a,b)=>uiRank(a)-uiRank(b)||(Number(b.estimated_net_usd||0)-Number(a.estimated_net_usd||0)));$("#counts").textContent=rows.length+" reales \xB7 "+rows.filter(x=>x.ai_executability==="AI_EXECUTABLE").length+" auto";
  $("#opps").innerHTML=rows.length?rows.map(x=>'<article class="opp"><div class="badges"><span class="badge">'+esc(x.source)+'</span><span class="badge">'+esc(x.mode||x.source_status)+'</span><span class="badge">'+esc(x.capability_class||"UNCLASSIFIED")+'</span><span class="badge">'+esc(x.ai_executability)+'</span></div><h3>'+esc(x.title)+'</h3><div class="money">'+(x.estimated_net_usd==null?"neto desconocido":"\u2248 $"+Number(x.estimated_net_usd).toFixed(2)+" net potencial")+'</div><div class="why">costo acci\xF3n: '+esc(x.economics?.estimated_task_cost_usdc==null?"\u2014":x.economics.estimated_task_cost_usdc+" USDC")+'</div><div class="why">'+(x.blockers?.length?"Bloqueos: "+esc(x.blockers.join(" \xB7 ")):"AUTO_ELIGIBLE \xB7 costo cero")+'</div><div class="meta" style="margin-top:8px">fresh '+esc(x.freshness_at)+'</div></article>').join(""):'<div class="empty">0 tareas abiertas en el \xFAltimo ciclo.</div>';
  $("#sources").innerHTML=Object.values(s.sources||{}).map(x=>'<div class="source"><div><b>'+esc(x.source)+'</b><small>'+esc(x.discovery_mode)+' \xB7 '+esc(x.automatic_action_level)+'</small><small>attempt '+esc(x.last_attempt||"\u2014")+' \xB7 success '+esc(x.last_success||"\u2014")+'</small><small>results '+esc(x.result_count??0)+' \xB7 '+esc(x.eligibility||"UNKNOWN")+(x.error?' \xB7 '+esc(x.error):'')+'</small></div><div class="'+(x.running?"good":"warn")+'">'+(x.running?"RUNNING":"OFF")+'</div></div>').join("");
- const e=money.earnings||{};$("#earnings").innerHTML=[["TODAY",e.today],["7D",e.seven_days],["30D",e.thirty_days],["IN_PROGRESS",e.in_progress],["SUBMITTED",e.submitted],["ACCEPTED",e.accepted],["PAID",e.paid],["WITHDRAWABLE",e.withdrawable],["WITHDRAWN",e.withdrawn]].map(([k,v])=>'<div class="moneybox"><small>'+k+'</small><b>$'+Number(v||0).toFixed(2)+'</b></div>').join("");
+ const e=money.earnings||{};$("#earnings").innerHTML=[["TODAY",e.today],["7D",e.seven_days],["30D",e.thirty_days],["IN_PROGRESS",e.in_progress],["SUBMITTED",e.submitted],["ACCEPTED",e.accepted],["PAID",e.paid],["WITHDRAWABLE",e.withdrawable],["WITHDRAWN",e.withdrawn],["MONTHLY_TARGET",e.monthly_target_usd],["MONTHLY_REALIZED",e.monthly_realized_withdrawable_usd],["MONEY_VELOCITY",e.money_velocity],["VELOCITY_STATUS",e.velocity_status]].map(([k,v])=>'<div class="moneybox"><small>'+k+'</small><b>'+(typeof v==="number"?"$"+Number(v).toFixed(2):v)+'</b></div>').join("");
  const qs=money.execution_queue?.states||{},qr=money.execution_queue?.rows||[];$("#queueCounts").innerHTML=Object.entries({DISCOVERED:qs.discovered||0,EVALUATING:qs.evaluating||0,AUTO_ELIGIBLE:qs.auto_eligible||0,HUMAN_ASSISTABLE:qs.human_assistable||0,WAITING_HUMAN:qs.waiting_human||0,ACQUIRING:qs.acquiring||0,EXECUTING:qs.executing||0,VERIFYING:qs.verifying||0,SUBMITTED:qs.submitted||0,ACCEPTED:qs.accepted||0,PAID:qs.paid||0}).map(([k,v])=>'<span class="badge">'+k+' '+v+'</span>').join("");
  $("#queue").innerHTML=qr.length?qr.slice(0,40).map(x=>'<div class="qrow"><div><b>'+esc(x.title)+'</b><small>'+esc(x.source)+' \xB7 '+esc(x.state)+' \xB7 '+esc(x.queue_classification)+(x.human_gate_required?' \xB7 HUMAN GATE':'')+'</small><small>potencial, no ganado: $'+Number(x.potential_not_earned_usd||0).toFixed(2)+'</small></div><span class="badge">'+esc(x.queue_classification)+'</span></div>').join(""):'<div class="empty">Cola vac\xEDa.</div>';
  const gp=money.human_gate?.proposals||[],isRealOwnerGate=x=>x.policy_boundary?.approval_control_eligible===true&&x.policy_boundary?.owner_consent_required_to_resume_atm===true&&x.policy_boundary?.runtime_resumes_after_owner_action===true&&x.policy_boundary?.readback_adapter_supports_completion===true&&x.policy_boundary?.exact_resume_adapter==='EXACT_RUNTIME_JOB_V1'&&!!x.policy_boundary?.execution_job_id&&!!x.proposed_action?.action_url,realGates=gp.filter(isRealOwnerGate),humanOnly=gp.filter(x=>!isRealOwnerGate(x));$("#humanGate").innerHTML=realGates.length?realGates.map(x=>'<div class="gatecard" data-opp="'+esc(x.opportunity_id)+'"><b>'+esc(x.title)+'</b><small class="warn">TU PRESENCIA ES INEVITABLE \xB7 ATM continuar\xE1 tras verificaci\xF3n externa</small><small>La URL oficial, firma/readback y reanudaci\xF3n del job exacto est\xE1n habilitadas.</small><div class="actions"><button class="btn ownerGateStart" data-url="'+esc(x.proposed_action.action_url)+'">ABRIR ACCI\xD3N OFICIAL</button></div></div>').join(""):'<div class="empty">ATM no necesita ninguna acci\xF3n tuya ahora.</div>';if(humanOnly.length)$("#humanGate").innerHTML+='<details style="margin-top:10px"><summary class="meta">'+humanOnly.length+' oportunidades requieren trabajo humano y ATM no las ejecutar\xE1</summary><div class="gatecards" style="margin-top:8px">'+humanOnly.slice(0,20).map(x=>'<div class="gatecard"><b>'+esc(x.title)+'</b><small class="bad">NO EJECUTABLE POR ATM</small><small>Motivo: '+esc((x.policy_boundary?.blocked_automation||[]).join(' \xB7 ')||'HUMAN_INTERACTION_REQUIRED')+'</small>'+(x.owner_approval?.status==='HISTORICAL_APPROVAL_NO_EFFECT'||x.owner_approval?.status==='APPROVED'?'<small class="warn">OK anterior sin efecto: NO ejecutada \xB7 NO enviada \xB7 $0 ganado.</small>':'')+'</div>').join('')+'</div></details>';
